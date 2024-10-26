@@ -5,6 +5,7 @@
 #include <time.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 
 void formatTimestamp(uint64_t usec, char *buffer, size_t bufferLen) {
     time_t t = usec / 1000000;
@@ -33,9 +34,18 @@ int main(void) {
         return 1;
     }
 
-    // Seek to the end of the journal to read new entries
-    sd_journal_seek_tail(journal);
-    sd_journal_next(journal);
+    // Get the current system time in microseconds
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    uint64_t currentTime = tv.tv_sec * (uint64_t) 1000000 + tv.tv_usec;
+
+    // Seek to the current timestamp, so we only get new entries
+    r = sd_journal_seek_realtime_usec(journal, currentTime);
+    if (r < 0) {
+        perror("Failed to seek to current time");
+        sd_journal_close(journal);
+        return 1;
+    }
 
     while (true) {
         // Wait for the new journal entries
@@ -47,7 +57,7 @@ int main(void) {
             int processId;
             const char *message, *syslogIdentifier, *user;
 
-            // Get the timestamp
+            // Get the timestamp of the journal entry
             r = sd_journal_get_realtime_usec(journal, &timestamp);
             if (r < 0) {
                 perror("Failed to get timestamp");
