@@ -4,11 +4,22 @@
 #include <stdbool.h>
 #include <time.h>
 #include <stdlib.h>
+#include <string.h>
 
-void format_timestamp(uint64_t usec, char *buffer, size_t buffer_len) {
+void formatTimestamp(uint64_t usec, char *buffer, size_t bufferLen) {
     time_t t = usec / 1000000;
-    struct tm *tm_info = localtime(&t);
-    strftime(buffer, buffer_len, "%b %d %H:%M:%S", tm_info);
+    struct tm *tmInfo = localtime(&t);
+    strftime(buffer, bufferLen, "%b %d %H:%M:%S", tmInfo);
+}
+
+const char *getJournalField(sd_journal *journal, const char *fieldName, int prefixLength) {
+    const char *fieldData;
+    size_t length;
+    int r = sd_journal_get_data(journal, fieldName, (const void **) &fieldData, &length);
+    if (r < 0) {
+        return NULL;
+    }
+    return fieldData + prefixLength; // Skip the prefix (e.g., "FIELD_NAME=")
 }
 
 int main(void) {
@@ -28,14 +39,13 @@ int main(void) {
 
     while (true) {
         // Wait for the new journal entries
-        sd_journal_wait(journal, (uint64_t)-1);
+        sd_journal_wait(journal, (uint64_t) -1);
 
         // Iterate over the new journal entries
         while (sd_journal_next(journal) > 0) {
-            const char *message, *syslog_identifier, *user, *subject;
             uint64_t timestamp;
-            int process_id;
-            size_t length;
+            int processId;
+            const char *message, *syslogIdentifier, *user;
 
             // Get the timestamp
             r = sd_journal_get_realtime_usec(journal, &timestamp);
@@ -44,44 +54,25 @@ int main(void) {
                 continue;
             }
 
-            // Get the process name (SYSLOG_IDENTIFIER)
-            r = sd_journal_get_data(journal, "SYSLOG_IDENTIFIER", (const void **) &syslog_identifier, &length);
-            if (r < 0) {
-                syslog_identifier = "unknown";
-            } else {
-                syslog_identifier += 18; // Skip the "SYSLOG_IDENTIFIER=" prefix
-            }
+            // Use the generalized function to get the specific fields
+            syslogIdentifier = getJournalField(journal, "SYSLOG_IDENTIFIER", 18);
+            if (!syslogIdentifier) syslogIdentifier = "unknown";
 
-            // Get the process ID
-            r = sd_journal_get_data(journal, "_PID", (const void **) &subject, &length);
-            if (r < 0) {
-                process_id = -1;
-            } else {
-                process_id = atoi(subject + 5); // Skip the "_PID=" prefix
-            }
+            const char *pidStr = getJournalField(journal, "_PID", 5);
+            processId = pidStr ? atoi(pidStr) : -1;
 
-            // Get the user
-            r = sd_journal_get_data(journal, "_HOSTNAME", (const void **) &user, &length);
-            if (r < 0) {
-                user = "unknown";
-            } else {
-                user += 10; // Skip the "_HOSTNAME=" prefix
-            }
+            user = getJournalField(journal, "_HOSTNAME", 10);
+            if (!user) user = "unknown";
 
-            // Get the message content
-            r = sd_journal_get_data(journal, "MESSAGE", (const void **) &message, &length);
-            if (r < 0) {
-                message = "No message";
-            } else {
-                message += 8; // Skip the "MESSAGE=" prefix
-            }
+            message = getJournalField(journal, "MESSAGE", 8);
+            if (!message) message = "No message";
 
             // Format the timestamp to match journalctl style
-            char time_buffer[64];
-            format_timestamp(timestamp, time_buffer, sizeof(time_buffer));
+            char timeBuffer[64];
+            formatTimestamp(timestamp, timeBuffer, sizeof(timeBuffer));
 
             // Print the log entry in a similar format to journalctl
-            printf("%s %s %s[%d]: %s\n", time_buffer, user, syslog_identifier, process_id, message);
+            printf("%s %s %s[%d]: %s\n", timeBuffer, user, syslogIdentifier, processId, message);
         }
     }
 
